@@ -56,11 +56,13 @@ function drawWater(){
  ctx.fillRect(0,0,W,H);
 }
 
-/* =============================
+/** =============================
    AUDIO
 ============================= */
 
 let audioCtx=null;
+let dropSound=null;
+
 function initAudio(){
  if(!audioCtx){
   audioCtx=new (window.AudioContext||window.webkitAudioContext)();
@@ -90,8 +92,6 @@ function playDroplet(x){
  source.connect(gain).connect(pan).connect(audioCtx.destination);
  source.start();
 }
-
-
 /* =============================
    FOOD + SAFE RIPPLES
 ============================= */
