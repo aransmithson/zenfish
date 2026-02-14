@@ -1,0 +1,345 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Zen Pond</title>
+<style>
+html,body{
+  margin:0;
+  height:100%;
+  overflow:hidden;
+  background:#021018;
+}
+canvas{
+  display:block;
+  width:100vw;
+  height:100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
+
+let W,H;
+function resize(){
+ const dpr=Math.min(2,window.devicePixelRatio||1);
+ W=innerWidth; H=innerHeight;
+ canvas.width=W*dpr;
+ canvas.height=H*dpr;
+ canvas.style.width=W+"px";
+ canvas.style.height=H+"px";
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener("resize",resize);
+resize();
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+const dist2=(ax,ay,bx,by)=>{let dx=bx-ax,dy=by-ay;return dx*dx+dy*dy};
+
+/* =============================
+   BACKGROUND
+============================= */
+
+function drawWater(){
+ const g=ctx.createLinearGradient(0,0,0,H);
+ g.addColorStop(0,"#0a2a43");
+ g.addColorStop(0.5,"#062033");
+ g.addColorStop(1,"#021018");
+ ctx.fillStyle=g;
+ ctx.fillRect(0,0,W,H);
+}
+
+/* =============================
+   AUDIO
+============================= */
+
+let audioCtx=null;
+function initAudio(){
+ if(!audioCtx){
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+ }
+}
+function playDroplet(x){
+ if(!audioCtx) return;
+ const now=audioCtx.currentTime;
+ const osc=audioCtx.createOscillator();
+ const gain=audioCtx.createGain();
+ const pan=audioCtx.createStereoPanner();
+ osc.type="sine";
+ osc.frequency.setValueAtTime(900,now);
+ osc.frequency.exponentialRampToValueAtTime(250,now+0.3);
+ gain.gain.setValueAtTime(0.15,now);
+ gain.gain.exponentialRampToValueAtTime(0.001,now+0.4);
+ pan.pan.value=(x/W)*2-1;
+ osc.connect(gain).connect(pan).connect(audioCtx.destination);
+ osc.start();
+ osc.stop(now+0.4);
+}
+
+/* =============================
+   FOOD + SAFE RIPPLES
+============================= */
+
+const foods=[];
+const ripples=[];
+let flow=0;
+
+canvas.addEventListener("pointerdown",e=>{
+ initAudio();
+ foods.push({x:e.clientX,y:e.clientY,size:8});
+ ripples.push({
+   x:e.clientX,
+   y:e.clientY,
+   life:0,
+   maxLife:2.5,
+   baseRadius:10
+ });
+ playDroplet(e.clientX);
+});
+
+function updateFood(dt){
+ flow+=dt*0.2;
+ for(const f of foods){
+  f.x+=Math.sin(flow+f.y*0.02)*8*dt;
+  f.y+=Math.cos(flow+f.x*0.02)*4*dt;
+ }
+}
+
+function updateRipples(dt){
+ for(const r of ripples){
+   r.life+=dt;
+ }
+ for(let i=ripples.length-1;i>=0;i--){
+   if(ripples[i].life>ripples[i].maxLife){
+     ripples.splice(i,1);
+   }
+ }
+}
+
+/* =============================
+   FISH
+============================= */
+
+class Fish{
+ constructor(){
+  this.x=rand(0,W);
+  this.y=rand(0,H);
+  const a=rand(0,Math.PI*2);
+  this.baseSpeed=rand(45,75);
+  this.sizeScale=rand(0.8,1.2);
+  this.vx=Math.cos(a)*this.baseSpeed;
+  this.vy=Math.sin(a)*this.baseSpeed;
+  this.tail=rand(0,Math.PI*2);
+  const hue=rand(0,360);
+  this.color=`hsl(${hue},60%,80%)`;
+ }
+
+ update(dt){
+  let steerX=0;
+  let steerY=0;
+  let nearest=null;
+  let nearestDist=Infinity;
+
+  for(const f of foods){
+   const d2v=dist2(this.x,this.y,f.x,f.y);
+   if(d2v<nearestDist){
+    nearestDist=d2v;
+    nearest=f;
+   }
+  }
+
+  if(nearest){
+   const dx=nearest.x-this.x;
+   const dy=nearest.y-this.y;
+   const d=Math.hypot(dx,dy)||1;
+   const pull=200*(1-Math.min(d/400,1));
+   steerX+=(dx/d)*pull;
+   steerY+=(dy/d)*pull;
+
+   if(d<15){
+    nearest.size-=40*dt;
+    if(nearest.size<=0){
+     foods.splice(foods.indexOf(nearest),1);
+    }
+   }
+  }
+
+  steerX+=Math.cos(this.tail*0.6)*20;
+  steerY+=Math.sin(this.tail*0.6)*20;
+
+  this.vx+=steerX*dt;
+  this.vy+=steerY*dt;
+
+  const speed=Math.hypot(this.vx,this.vy)||1;
+  this.vx=(this.vx/speed)*this.baseSpeed;
+  this.vy=(this.vy/speed)*this.baseSpeed;
+
+  this.x+=this.vx*dt;
+  this.y+=this.vy*dt;
+
+  if(this.x<0) this.x=W;
+  if(this.x>W) this.x=0;
+  if(this.y<0) this.y=H;
+  if(this.y>H) this.y=0;
+
+  this.tail+=dt*8;
+ }
+
+ draw(){
+  const ang=Math.atan2(this.vy,this.vx);
+  ctx.save();
+  ctx.translate(this.x,this.y);
+  ctx.rotate(ang);
+
+  ctx.fillStyle=this.color;
+
+  ctx.beginPath();
+  ctx.ellipse(0,0,12*this.sizeScale,6*this.sizeScale,0,0,Math.PI*2);
+  ctx.fill();
+
+  const tailSwish=Math.sin(this.tail)*6*this.sizeScale;
+
+  ctx.beginPath();
+  ctx.moveTo(-12*this.sizeScale,0);
+  ctx.lineTo(-22*this.sizeScale,-6*this.sizeScale+tailSwish);
+  ctx.lineTo(-22*this.sizeScale,6*this.sizeScale+tailSwish);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+ }
+}
+
+const fishes=[];
+for(let i=0;i<25;i++) fishes.push(new Fish());
+
+/* =============================
+   FLOWERS
+============================= */
+
+const flowers=[];
+for(let i=0;i<12;i++){
+ flowers.push({
+  x:rand(0,W),
+  y:rand(0,H),
+  rot:rand(0,Math.PI*2),
+  driftX:rand(-10,10),
+  driftY:rand(5,20),
+  petals:Math.floor(rand(5,9)),
+  size:rand(8,24),
+  rotSpeed:rand(0.1,0.6)
+ });
+}
+
+function updateFlowers(dt){
+ for(const f of flowers){
+  f.x+=f.driftX*dt;
+  f.y+=f.driftY*dt;
+  f.rot+=dt*f.rotSpeed;
+
+  if(f.y>H+50){
+   f.y=-50;
+   f.x=rand(0,W);
+  }
+
+  if(f.x<-50) f.x=W+50;
+  if(f.x>W+50) f.x=-50;
+ }
+}
+
+function drawFlowers(){
+ for(const f of flowers){
+  ctx.save();
+  ctx.translate(f.x,f.y);
+  ctx.rotate(f.rot);
+
+  ctx.shadowColor="rgba(0,0,0,0.25)";
+  ctx.shadowBlur=15;
+  ctx.shadowOffsetY=4;
+
+  for(let i=0;i<f.petals;i++){
+   ctx.save();
+   ctx.rotate((Math.PI*2/f.petals)*i);
+   ctx.fillStyle="rgba(255,182,193,0.9)";
+   ctx.beginPath();
+   ctx.ellipse(f.size*0.6,0,f.size,f.size*0.5,0,0,Math.PI*2);
+   ctx.fill();
+   ctx.restore();
+  }
+
+  ctx.fillStyle="rgba(255,220,120,0.95)";
+  ctx.beginPath();
+  ctx.arc(0,0,f.size*0.5,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.shadowColor="transparent";
+  ctx.restore();
+ }
+}
+
+/* =============================
+   LOOP
+============================= */
+
+let last=performance.now();
+function loop(now){
+ const dt=Math.min(0.033,(now-last)/1000);
+ last=now;
+
+ drawWater();
+ updateFood(dt);
+ updateRipples(dt);
+ updateFlowers(dt);
+
+ for(const f of fishes) f.update(dt);
+
+ /* SAFE ripple drawing */
+ for(const r of ripples){
+  const t=r.life/r.maxLife;
+  const ease=1-Math.pow(1-t,2);
+  const radius=r.baseRadius+ease*220;
+  const alpha=1-t;
+
+  ctx.save();
+  ctx.lineWidth=2*(1-t);
+  ctx.strokeStyle=`rgba(255,255,255,${alpha*0.5})`;
+  ctx.shadowColor=`rgba(255,255,255,${alpha*0.3})`;
+  ctx.shadowBlur=20*(1-t);
+
+  for(let i=0;i<3;i++){
+    const ringRadius = radius - i*18;
+    if(ringRadius > 0){
+      ctx.beginPath();
+      ctx.arc(r.x,r.y,ringRadius,0,Math.PI*2);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+ }
+
+ for(const f of foods){
+  ctx.fillStyle="yellow";
+  ctx.beginPath();
+  ctx.arc(f.x,f.y,f.size,0,Math.PI*2);
+  ctx.fill();
+ }
+
+ for(const f of fishes) f.draw();
+ drawFlowers();
+
+ requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
