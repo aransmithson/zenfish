@@ -168,9 +168,77 @@ canvas{
       this.color = `hsl(${hue},60%,80%)`;
     }
 
-    update(dt) {
+    update(dt, fishes) {
+      // --- Boids-style flocking (cohesion, alignment, separation) ---
+      const perception = 90;
+      const separationDist = 34;
+      const perception2 = perception * perception;
+      const separation2 = separationDist * separationDist;
+
+      let cohX = 0, cohY = 0, aliX = 0, aliY = 0, sepX = 0, sepY = 0;
+      let count = 0;
+
+      for (const other of fishes) {
+        if (other === this) continue;
+        const d2v = dist2(this.x, this.y, other.x, other.y);
+        if (d2v > perception2) continue;
+
+        count++;
+        cohX += other.x;
+        cohY += other.y;
+        aliX += other.vx;
+        aliY += other.vy;
+
+        if (d2v < separation2 && d2v > 0.0001) {
+          const dx = this.x - other.x;
+          const dy = this.y - other.y;
+          // Weighted stronger when closer
+          const inv = 1 / d2v;
+          sepX += dx * inv;
+          sepY += dy * inv;
+        }
+      }
+
+      // Helper to limit a vector magnitude
+      const limit = (x, y, max) => {
+        const m = Math.hypot(x, y) || 1;
+        if (m <= max) return [x, y];
+        const s = max / m;
+        return [x * s, y * s];
+      };
+
       let steerX = 0;
       let steerY = 0;
+
+      if (count > 0) {
+        // Cohesion: steer toward average position
+        cohX = cohX / count - this.x;
+        cohY = cohY / count - this.y;
+        let m = Math.hypot(cohX, cohY) || 1;
+        cohX = (cohX / m) * this.baseSpeed - this.vx;
+        cohY = (cohY / m) * this.baseSpeed - this.vy;
+        [cohX, cohY] = limit(cohX, cohY, 120);
+
+        // Alignment: steer toward average velocity
+        aliX /= count;
+        aliY /= count;
+        m = Math.hypot(aliX, aliY) || 1;
+        aliX = (aliX / m) * this.baseSpeed - this.vx;
+        aliY = (aliY / m) * this.baseSpeed - this.vy;
+        [aliX, aliY] = limit(aliX, aliY, 140);
+
+        // Separation: steer away from close neighbors
+        m = Math.hypot(sepX, sepY) || 1;
+        sepX = (sepX / m) * this.baseSpeed - this.vx;
+        sepY = (sepY / m) * this.baseSpeed - this.vy;
+        [sepX, sepY] = limit(sepX, sepY, 180);
+
+        // Weights tuned to keep the same calm "Zen" feel
+        steerX += cohX * 0.55 + aliX * 0.75 + sepX * 1.15;
+        steerY += cohY * 0.55 + aliY * 0.75 + sepY * 1.15;
+      }
+
+      // --- Food attraction (kept from original, just layered on top) ---
       let nearest = null;
       let nearestDist = Infinity;
 
@@ -186,7 +254,7 @@ canvas{
         const dx = nearest.x - this.x;
         const dy = nearest.y - this.y;
         const d = Math.hypot(dx, dy) || 1;
-        const pull = 200 * (1 - Math.min(d / 400, 1));
+        const pull = 220 * (1 - Math.min(d / 420, 1));
         steerX += (dx / d) * pull;
         steerY += (dy / d) * pull;
 
@@ -198,15 +266,18 @@ canvas{
         }
       }
 
-      steerX += Math.cos(this.tail * 0.6) * 20;
-      steerY += Math.sin(this.tail * 0.6) * 20;
+      // Gentle wander so schools don't become too rigid
+      steerX += Math.cos(this.tail * 0.6) * 18;
+      steerY += Math.sin(this.tail * 0.6) * 18;
 
       this.vx += steerX * dt;
       this.vy += steerY * dt;
 
+      // Keep speed steady (original vibe), but allow tiny variation
       const speed = Math.hypot(this.vx, this.vy) || 1;
-      this.vx = (this.vx / speed) * this.baseSpeed;
-      this.vy = (this.vy / speed) * this.baseSpeed;
+      const target = this.baseSpeed;
+      this.vx = (this.vx / speed) * target;
+      this.vy = (this.vy / speed) * target;
 
       this.x += this.vx * dt;
       this.y += this.vy * dt;
@@ -326,7 +397,7 @@ canvas{
     updateRipples(dt);
     updateFlowers(dt);
 
-    for (const f of fishes) f.update(dt);
+    for (const f of fishes) f.update(dt, fishes);
 
     /* SAFE ripple drawing */
     for (const r of ripples) {
