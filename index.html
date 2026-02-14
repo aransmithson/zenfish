@@ -64,24 +64,33 @@ let audioCtx=null;
 function initAudio(){
  if(!audioCtx){
   audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  
+  // Load drop.mp3
+  fetch('drop.mp3')
+    .then(response=>response.arrayBuffer())
+    .then(arrayBuffer=>audioCtx.decodeAudioData(arrayBuffer))
+    .then(audioBuffer=>{
+      dropSound=audioBuffer;
+    })
+    .catch(err=>console.log('Sound file not loaded:',err));
  }
 }
+
 function playDroplet(x){
- if(!audioCtx) return;
- const now=audioCtx.currentTime;
- const osc=audioCtx.createOscillator();
+ if(!audioCtx||!settings.sound||!dropSound) return;
+ 
+ const source=audioCtx.createBufferSource();
  const gain=audioCtx.createGain();
  const pan=audioCtx.createStereoPanner();
- osc.type="sine";
- osc.frequency.setValueAtTime(900,now);
- osc.frequency.exponentialRampToValueAtTime(250,now+0.3);
- gain.gain.setValueAtTime(0.15,now);
- gain.gain.exponentialRampToValueAtTime(0.001,now+0.4);
+ 
+ source.buffer=dropSound;
+ gain.gain.value=0.4;
  pan.pan.value=(x/W)*2-1;
- osc.connect(gain).connect(pan).connect(audioCtx.destination);
- osc.start();
- osc.stop(now+0.4);
+ 
+ source.connect(gain).connect(pan).connect(audioCtx.destination);
+ source.start();
 }
+
 
 /* =============================
    FOOD + SAFE RIPPLES
