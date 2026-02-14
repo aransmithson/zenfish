@@ -332,8 +332,12 @@ canvas{
       driftY: rand(5, 20),
       petals: Math.floor(rand(5, 9)),
       size: rand(8, 24),
-      rotSpeed: rand(0.1, 0.6)
+      rotSpeed: rand(0.1, 0.6),
+      color: Math.random() < 0.5
+        ? "rgba(255,255,255,0.95)"     // white
+        : "rgba(255,182,193,0.9)"      // pink
     });
+
   }
 
   function updateFlowers(dt) {
@@ -354,34 +358,54 @@ canvas{
 
   function drawFlowers() {
     for (const f of flowers) {
+      // --- Draw Shadow First ---
+      ctx.save();
+      // Shift shadow slightly down and to the right
+      ctx.translate(f.x + 15, f.y + 15); 
+      ctx.rotate(f.rot);
+      
+      // Use a very soft, dark blue/black for water shadows
+      ctx.fillStyle = "rgba(0, 0, 0, 0.2)"; 
+      
+      for (let i = 0; i < f.petals; i++) {
+        ctx.save();
+        ctx.rotate((Math.PI * 2 / f.petals) * i);
+        ctx.beginPath();
+        // Match the petal shape of the main flower
+        ctx.ellipse(f.size * 0.6, 0, f.size, f.size * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // --- Draw Main Flower ---
       ctx.save();
       ctx.translate(f.x, f.y);
       ctx.rotate(f.rot);
 
-      ctx.shadowColor = "rgba(0,0,0,0.25)";
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetY = 4;
+      // Keeping your original glow/blur for the flower itself
+      ctx.shadowColor = "rgba(0,0,0,0.15)";
+      ctx.shadowBlur = 10;
 
       for (let i = 0; i < f.petals; i++) {
         ctx.save();
         ctx.rotate((Math.PI * 2 / f.petals) * i);
-        ctx.fillStyle = "rgba(255,182,193,0.9)";
+        ctx.fillStyle = f.color;
         ctx.beginPath();
         ctx.ellipse(f.size * 0.6, 0, f.size, f.size * 0.5, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
 
+      // Center of the flower
       ctx.fillStyle = "rgba(255,220,120,0.95)";
       ctx.beginPath();
       ctx.arc(0, 0, f.size * 0.5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.shadowColor = "transparent";
       ctx.restore();
     }
   }
-
   /* =============================
      LOOP
   ============================= */
