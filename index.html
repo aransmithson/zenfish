@@ -20,7 +20,6 @@ canvas{
 </head>
 <body>
 <canvas id="c"></canvas>
-
 <script>
 (() => {
   const canvas = document.getElementById("c");
@@ -28,7 +27,8 @@ canvas{
 
   let W, H;
   const settings = {
-    sound: true
+    sound: true,
+    rain: false
   };
 
   function resize() {
@@ -43,6 +43,33 @@ canvas{
   }
   addEventListener("resize", resize);
   resize();
+
+  // Automatic rain cycling
+  let rainCycleTimer = 0;
+  let rainDuration = 0;
+  let isRaining = false;
+  const RAIN_BREAK_DURATION = 20; // Wait 20 seconds between rain cycles
+
+  function updateRainCycle(dt) {
+    rainCycleTimer += dt;
+    
+    if (isRaining) {
+      // Currently raining - check if duration is over
+      if (rainCycleTimer >= rainDuration) {
+        isRaining = false;
+        settings.rain = false;
+        rainCycleTimer = 0;
+      }
+    } else {
+      // Not raining - check if it's time to rain again
+      if (rainCycleTimer >= RAIN_BREAK_DURATION) {
+        isRaining = true;
+        settings.rain = true;
+        rainDuration = rand(5, 20); // Rain for 5-20 seconds
+        rainCycleTimer = 0;
+      }
+    }
+  }
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const dist2 = (ax, ay, bx, by) => {
@@ -156,8 +183,9 @@ canvas{
         x: e.clientX,
         y: e.clientY,
         life: 0,
-        maxLife: 2.5,
-        baseRadius: 10
+        maxLife: 2.0,
+        baseRadius: 5,
+        isRain: true
       });
       playDroplet(e.clientX);
     }
@@ -191,6 +219,88 @@ canvas{
         spookZones.splice(i, 1);
       }
     }
+  }
+
+  /* =============================
+     RAIN SYSTEM
+  ============================= */
+
+  const rainDrops = [];
+  const MAX_RAIN_DROPS = 5;
+  let rainTimer = 0;
+
+  function spawnRainDrop() {
+    if (rainDrops.length >= MAX_RAIN_DROPS) return;
+    
+    const targetY = rand(H * 0.2, H * 0.95); // Random height where drop will hit
+    
+    rainDrops.push({
+      x: rand(W * 0.1, W * 0.9),
+      y: -20,
+      targetY: targetY,
+      speed: rand(300, 450),
+      length: rand(15, 25),
+      opacity: rand(0.4, 0.7)
+    });
+  }
+
+  function updateRain(dt) {
+    if (!settings.rain) {
+      rainDrops.length = 0;
+      return;
+    }
+
+    // Spawn new rain drops periodically
+    rainTimer += dt;
+    if (rainTimer > rand(0.3, 0.6)) {
+      spawnRainDrop();
+      rainTimer = 0;
+    }
+
+    // Update existing rain drops
+    for (let i = rainDrops.length - 1; i >= 0; i--) {
+      const drop = rainDrops[i];
+      drop.y += drop.speed * dt;
+
+      // Check if drop hit the water surface (its target height)
+      if (drop.y >= drop.targetY) {
+        // Create rain ripple at the target height
+        ripples.push({
+          x: drop.x,
+          y: drop.targetY,
+          life: 0,
+          maxLife: 2.0,
+          baseRadius: 5,
+          isRain: true
+        });
+        
+        // Remove the drop
+        rainDrops.splice(i, 1);
+        
+        // Optional: play subtle sound
+        if (Math.random() < 0.3) {
+          playDroplet(drop.x);
+        }
+      }
+    }
+  }
+
+  function drawRain() {
+    if (!settings.rain) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    
+    for (const drop of rainDrops) {
+      ctx.strokeStyle = `rgba(200, 220, 255, ${drop.opacity})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(drop.x, drop.y);
+      ctx.lineTo(drop.x, drop.y + drop.length);
+      ctx.stroke();
+    }
+    
+    ctx.restore();
   }
 
   /* =============================
@@ -650,36 +760,67 @@ ctx.globalAlpha = 1;
     last = now;
 
     drawWater();
+    updateRainCycle(dt);
     updateFood(dt);
     updateRipples(dt);
     updateSpookZones(dt);
     updateFlowers(dt);
+    updateRain(dt);
 
     for (const f of fishes) f.update(dt, fishes);
 
-    /* SAFE ripple drawing */
+    /* Ripple drawing - differentiate rain vs click */
     for (const r of ripples) {
       const t = r.life / r.maxLife;
-      const ease = 1 - Math.pow(1 - t, 2);
-      const radius = r.baseRadius + ease * 220;
-      const alpha = 1 - t;
+      
+      if (r.isRain) {
+        // Rain ripples: smaller, faster, more delicate
+        const ease = 1 - Math.pow(1 - t, 3);
+        const radius = r.baseRadius + ease * 60;
+        const alpha = (1 - t) * 0.6;
 
-      ctx.save();
-      ctx.lineWidth = 2 * (1 - t);
-      ctx.strokeStyle = `rgba(255,255,255,${alpha*0.5})`;
-      ctx.shadowColor = `rgba(255,255,255,${alpha*0.3})`;
-      ctx.shadowBlur = 20 * (1 - t);
-
-      for (let i = 0; i < 3; i++) {
-        const ringRadius = radius - i * 18;
-        if (ringRadius > 0) {
+        ctx.save();
+        ctx.lineWidth = 1.5 * (1 - t);
+        ctx.strokeStyle = `rgba(200, 220, 255, ${alpha})`;
+        
+        // Single elegant ring
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        // Inner subtle ring
+        if (radius > 15) {
+          ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.5})`;
+          ctx.lineWidth = 1 * (1 - t);
           ctx.beginPath();
-          ctx.arc(r.x, r.y, ringRadius, 0, Math.PI * 2);
+          ctx.arc(r.x, r.y, radius * 0.6, 0, Math.PI * 2);
           ctx.stroke();
         }
-      }
+        
+        ctx.restore();
+      } else {
+        // Click/food ripples: original larger ripples
+        const ease = 1 - Math.pow(1 - t, 2);
+        const radius = r.baseRadius + ease * 220;
+        const alpha = 1 - t;
 
-      ctx.restore();
+        ctx.save();
+        ctx.lineWidth = 2 * (1 - t);
+        ctx.strokeStyle = `rgba(255,255,255,${alpha*0.5})`;
+        ctx.shadowColor = `rgba(255,255,255,${alpha*0.3})`;
+        ctx.shadowBlur = 20 * (1 - t);
+
+        for (let i = 0; i < 3; i++) {
+          const ringRadius = radius - i * 18;
+          if (ringRadius > 0) {
+            ctx.beginPath();
+            ctx.arc(r.x, r.y, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+
+        ctx.restore();
+      }
     }
 
     for (const f of foods) {
@@ -691,6 +832,7 @@ ctx.globalAlpha = 1;
 
     for (const f of fishes) f.draw();
     drawFlowers();
+    drawRain();
 
     requestAnimationFrame(loop);
   }
