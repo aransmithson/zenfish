@@ -164,8 +164,34 @@ canvas{
       this.vx = Math.cos(a) * this.baseSpeed;
       this.vy = Math.sin(a) * this.baseSpeed;
       this.tail = rand(0, Math.PI * 2);
-      const hue = rand(0, 360);
-      this.color = `hsl(${hue},60%,80%)`;
+      
+      // Classic koi color patterns
+      const patterns = [
+        { base: '#ffffff', accent: '#ff6b35', spots: true },  // Kohaku (white + red)
+        { base: '#ffd700', accent: '#ff8c00', spots: false }, // Gold
+        { base: '#ffffff', accent: '#ff1744', spots: true },  // White + deep red
+        { base: '#ffe0b5', accent: '#ff6f00', spots: true },  // Cream + orange
+        { base: '#ff6b6b', accent: '#8b0000', spots: false }, // Red
+        { base: '#ffffff', accent: '#000000', spots: true },  // Shiro Utsuri (white + black)
+      ];
+      
+      const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+      this.baseColor = pattern.base;
+      this.accentColor = pattern.accent;
+      this.hasSpots = pattern.spots;
+      
+      // Generate random spots if applicable
+      this.spots = [];
+      if (this.hasSpots) {
+        const numSpots = Math.floor(rand(2, 5));
+        for (let i = 0; i < numSpots; i++) {
+          this.spots.push({
+            x: rand(-8, 4),
+            y: rand(-4, 4),
+            size: rand(3, 7) * this.sizeScale
+          });
+        }
+      }
     }
 
     update(dt, fishes) {
@@ -296,20 +322,80 @@ canvas{
       ctx.translate(this.x, this.y);
       ctx.rotate(ang);
 
-      ctx.fillStyle = this.color;
+      // Shadow underneath fish for depth
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.ellipse(1, 4, 11 * this.sizeScale, 5 * this.sizeScale, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
 
+      // Main body with gradient for 3D effect
+      const bodyGradient = ctx.createRadialGradient(
+        2, -1, 0,
+        0, 0, 12 * this.sizeScale
+      );
+      bodyGradient.addColorStop(0, this.baseColor);
+      bodyGradient.addColorStop(0.7, this.baseColor);
+      bodyGradient.addColorStop(1, this.accentColor.replace(')', ', 0.3)').replace('#', 'rgba(').replace(/^rgba\(([^,]+)/, (m, hex) => {
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}`;
+      }));
+      
+      ctx.fillStyle = bodyGradient;
       ctx.beginPath();
       ctx.ellipse(0, 0, 12 * this.sizeScale, 6 * this.sizeScale, 0, 0, Math.PI * 2);
       ctx.fill();
 
+      // Add spots/patterns
+      if (this.hasSpots) {
+        ctx.fillStyle = this.accentColor;
+        for (const spot of this.spots) {
+          ctx.globalAlpha = 0.8;
+          ctx.beginPath();
+          ctx.ellipse(spot.x, spot.y, spot.size, spot.size * 0.8, rand(0, Math.PI), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Subtle scales texture
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.strokeStyle = this.accentColor;
+      ctx.lineWidth = 0.5;
+      for (let i = -8; i < 8; i += 3) {
+        for (let j = -4; j < 4; j += 2.5) {
+          ctx.beginPath();
+          ctx.arc(i, j, 1.5 * this.sizeScale, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+
 // --- Koi Style Flowing Pectoral Fins (forward + gentle waggle) ---
-ctx.globalAlpha = 0.9;
+ctx.globalAlpha = 0.8;
 
 // Slow, elegant waggle (very subtle)
 const finWaggle = Math.sin(this.tail * 0.8) * 3 * this.sizeScale;
 
 // Move fins forward toward the head
 const finOffsetX = 6 * this.sizeScale;
+
+// Fin gradient
+const finGradient = ctx.createRadialGradient(finOffsetX, 0, 0, finOffsetX, 0, 16 * this.sizeScale);
+finGradient.addColorStop(0, this.baseColor);
+finGradient.addColorStop(1, this.accentColor.replace(')', ', 0.4)').replace('#', 'rgba(').replace(/^rgba\(([^,]+)/, (m, hex) => {
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}`;
+}));
+
+ctx.fillStyle = finGradient;
 
 // Top flowing fin
 ctx.beginPath();
@@ -347,13 +433,32 @@ ctx.fill();
 
 ctx.globalAlpha = 1;
 
+      // Tail with gradient
       const tailSwish = Math.sin(this.tail) * 6 * this.sizeScale;
-
+      const tailGradient = ctx.createLinearGradient(-12 * this.sizeScale, 0, -22 * this.sizeScale, 0);
+      tailGradient.addColorStop(0, this.baseColor);
+      tailGradient.addColorStop(1, this.accentColor);
+      
+      ctx.fillStyle = tailGradient;
+      ctx.globalAlpha = 0.9;
       ctx.beginPath();
       ctx.moveTo(-12 * this.sizeScale, 0);
       ctx.lineTo(-22 * this.sizeScale, -6 * this.sizeScale + tailSwish);
       ctx.lineTo(-22 * this.sizeScale, 6 * this.sizeScale + tailSwish);
       ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // Eye
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(8 * this.sizeScale, -1.5 * this.sizeScale, 1.2 * this.sizeScale, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Eye highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.beginPath();
+      ctx.arc(8.3 * this.sizeScale, -1.8 * this.sizeScale, 0.5 * this.sizeScale, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
