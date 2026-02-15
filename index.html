@@ -302,6 +302,51 @@ canvas{
       ctx.ellipse(0, 0, 12 * this.sizeScale, 6 * this.sizeScale, 0, 0, Math.PI * 2);
       ctx.fill();
 
+// --- Koi Style Flowing Pectoral Fins (forward + gentle waggle) ---
+ctx.globalAlpha = 0.9;
+
+// Slow, elegant waggle (very subtle)
+const finWaggle = Math.sin(this.tail * 0.8) * 3 * this.sizeScale;
+
+// Move fins forward toward the head
+const finOffsetX = 6 * this.sizeScale;
+
+// Top flowing fin
+ctx.beginPath();
+ctx.moveTo(finOffsetX, -3 * this.sizeScale);
+ctx.quadraticCurveTo(
+  -16 * this.sizeScale,
+  -14 * this.sizeScale + finWaggle,
+  -4 * this.sizeScale,
+  -2 * this.sizeScale
+);
+ctx.quadraticCurveTo(
+  2 * this.sizeScale,
+  -6 * this.sizeScale,
+  finOffsetX,
+  -3 * this.sizeScale
+);
+ctx.fill();
+
+// Bottom flowing fin
+ctx.beginPath();
+ctx.moveTo(finOffsetX, 3 * this.sizeScale);
+ctx.quadraticCurveTo(
+  -16 * this.sizeScale,
+  14 * this.sizeScale - finWaggle,
+  -4 * this.sizeScale,
+  2 * this.sizeScale
+);
+ctx.quadraticCurveTo(
+  2 * this.sizeScale,
+  6 * this.sizeScale,
+  finOffsetX,
+  3 * this.sizeScale
+);
+ctx.fill();
+
+ctx.globalAlpha = 1;
+
       const tailSwish = Math.sin(this.tail) * 6 * this.sizeScale;
 
       ctx.beginPath();
