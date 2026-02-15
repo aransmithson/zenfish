@@ -31,6 +31,9 @@ canvas{
     rain: false
   };
 
+  // Game start gate (hints begin timing after first non-mute interaction)
+  let gameStarted = true;
+
   function resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     W = innerWidth;
@@ -52,7 +55,7 @@ canvas{
 
   function updateRainCycle(dt) {
     rainCycleTimer += dt;
-    
+
     if (isRaining) {
       // Currently raining - check if duration is over
       if (rainCycleTimer >= rainDuration) {
@@ -73,9 +76,8 @@ canvas{
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const dist2 = (ax, ay, bx, by) => {
-    let dx = bx - ax,
-      dy = by - ay;
-    return dx * dx + dy * dy
+    let dx = bx - ax, dy = by - ay;
+    return dx * dx + dy * dy;
   };
 
   /* =============================
@@ -96,27 +98,97 @@ canvas{
   ============================= */
 
   let audioCtx = null;
+
   let dropSound = null;
+  let ambientBuffer = null;
+  let rainBuffer = null;
+
+  let ambientSource = null;
+  let ambientGain = null;
+
+  let rainSource = null;
+  let rainGain = null;
 
   function initAudio() {
-    if (!audioCtx) {
-      audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx) return;
 
-      fetch('drop.mp3')
-        .then(response => response.arrayBuffer())
-        .then(arrayBuffer => audioCtx.decodeAudioData(arrayBuffer))
-        .then(audioBuffer => {
-          dropSound = audioBuffer;
-        })
-        .catch(err => console.log('Sound file not loaded:', err));
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    Promise.all([
+      fetch('drop.mp3').then(r => r.arrayBuffer()),
+      fetch('ambient.mp3').then(r => r.arrayBuffer()),
+      fetch('rain.mp3').then(r => r.arrayBuffer())
+    ])
+      .then(buffers => Promise.all(buffers.map(b => audioCtx.decodeAudioData(b))))
+      .then(decoded => {
+        dropSound = decoded[0];
+        ambientBuffer = decoded[1];
+        rainBuffer = decoded[2];
+
+        startAmbient();
+      })
+      .catch(err => console.log('Sound files not loaded:', err));
+  }
+
+  function startAmbient() {
+    if (!audioCtx || !ambientBuffer || ambientSource) return;
+
+    ambientSource = audioCtx.createBufferSource();
+    ambientSource.buffer = ambientBuffer;
+    ambientSource.loop = true;
+
+    ambientGain = audioCtx.createGain();
+    ambientGain.gain.value = 0.5;
+
+    ambientSource.connect(ambientGain).connect(audioCtx.destination);
+    ambientSource.start();
+  }
+
+  function ensureRainSound() {
+    if (!audioCtx || !rainBuffer) return;
+    if (rainSource) return;
+
+    rainSource = audioCtx.createBufferSource();
+    rainSource.buffer = rainBuffer;
+    rainSource.loop = true;
+
+    rainGain = audioCtx.createGain();
+    rainGain.gain.value = 0; // fade in from 0
+
+    rainSource.connect(rainGain).connect(audioCtx.destination);
+    rainSource.start();
+  }
+
+  function stopRainSound() {
+    if (!rainSource) return;
+    try { rainSource.stop(); } catch {}
+    try { rainSource.disconnect(); } catch {}
+    rainSource = null;
+    rainGain = null;
+  }
+
+  function updateRainAudio(dt) {
+    if (!audioCtx || !settings.sound) return;
+
+    // If rain toggled on, ensure source exists and fade in
+    if (settings.rain) {
+      ensureRainSound();
+      if (rainGain) {
+        const target = 0.4;
+        rainGain.gain.value += (target - rainGain.gain.value) * 0.02;
+      }
+    } else {
+      // Fade out and stop when nearly silent
+      if (rainGain) {
+        rainGain.gain.value += (0 - rainGain.gain.value) * 0.02;
+        if (rainGain.gain.value < 0.01) stopRainSound();
+      }
     }
   }
 
   function playDroplet(x) {
-    // Check if settings exists and sound is enabled
     if (!audioCtx || !settings.sound || !dropSound) return;
 
-    // Resume context if suspended by browser
     if (audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
@@ -134,6 +206,172 @@ canvas{
   }
 
   /* =============================
+     UI: MUTE ICON + HINTS
+  ============================= */
+
+  const muteIcon = {
+    size: 26,
+    padding: 18
+  };
+
+  function drawMuteIcon() {
+    const x = W - muteIcon.padding - muteIcon.size;
+    const y = muteIcon.padding;
+
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+
+    ctx.shadowColor = "rgba(255,255,255,0.18)";
+    ctx.shadowBlur = 8;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 1.5;
+
+    // Speaker
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y + muteIcon.size * 0.35);
+    ctx.lineTo(x + 10, y + muteIcon.size * 0.35);
+    ctx.lineTo(x + 16, y + muteIcon.size * 0.2);
+    ctx.lineTo(x + 16, y + muteIcon.size * 0.8);
+    ctx.lineTo(x + 10, y + muteIcon.size * 0.65);
+    ctx.lineTo(x + 4, y + muteIcon.size * 0.65);
+    ctx.closePath();
+    ctx.stroke();
+
+    if (!settings.sound) {
+      // Cross
+      ctx.beginPath();
+      ctx.moveTo(x + 18, y + 6);
+      ctx.lineTo(x + 24, y + 20);
+      ctx.moveTo(x + 24, y + 6);
+      ctx.lineTo(x + 18, y + 20);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Hint system (starts after gameStarted)
+  let hintTimer = 0;
+  let firstTapOccurred = false;
+
+  const hintState = {
+    phase: 0,   // 0 waiting, 1 first, 2 gap, 3 second, 4 done
+    alpha: 0,
+    yOffset: 0,
+    shimmer: 0
+  };
+
+  function updateHints(dt) {
+    if (!gameStarted) return;
+
+    hintTimer += dt;
+    hintState.shimmer += dt * 2;
+
+    const FADE_IN = 2.0;
+    const HOLD = 2.5;
+    const FADE_OUT = 2.0;
+    const START_DELAY = 2.0;
+
+    // Wait before first hint
+    if (hintState.phase === 0 && hintTimer > START_DELAY) {
+      hintState.phase = 1;
+      hintTimer = 0;
+    }
+
+    // FIRST MESSAGE
+    if (hintState.phase === 1) {
+      // Disappear immediately on first tap
+      if (firstTapOccurred) {
+        hintState.phase = 2;
+        hintTimer = 0;
+        hintState.alpha = 0;
+        hintState.yOffset = 0;
+        return;
+      }
+
+      if (hintTimer < FADE_IN) {
+        hintState.alpha = hintTimer / FADE_IN;
+      } else if (hintTimer < FADE_IN + HOLD) {
+        hintState.alpha = 1;
+      } else if (hintTimer < FADE_IN + HOLD + FADE_OUT) {
+        hintState.alpha = 1 - (hintTimer - FADE_IN - HOLD) / FADE_OUT;
+      } else {
+        hintState.phase = 2;
+        hintTimer = 0;
+        hintState.alpha = 0;
+      }
+    }
+
+    // GAP BEFORE SECOND
+    if (hintState.phase === 2) {
+      // Only show second if rain hasn't started
+      if (settings.rain) {
+        hintState.phase = 4;
+        hintState.alpha = 0;
+        hintState.yOffset = 0;
+        return;
+      }
+
+      if (hintTimer > 1.5) {
+        hintState.phase = 3;
+        hintTimer = 0;
+      }
+    }
+
+    // SECOND MESSAGE
+    if (hintState.phase === 3) {
+      if (hintTimer < FADE_IN) {
+        hintState.alpha = hintTimer / FADE_IN;
+      } else if (hintTimer < FADE_IN + HOLD) {
+        hintState.alpha = 1;
+      } else if (hintTimer < FADE_IN + HOLD + FADE_OUT) {
+        hintState.alpha = 1 - (hintTimer - FADE_IN - HOLD) / FADE_OUT;
+      } else {
+        hintState.phase = 4;
+        hintState.alpha = 0;
+      }
+    }
+
+    // Soft upward drift while visible
+    hintState.yOffset = -8 * hintState.alpha;
+  }
+
+  function drawHints() {
+    if (hintState.phase === 0 || hintState.phase === 4) return;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "14px sans-serif";
+
+    const shimmer = Math.sin(hintState.shimmer) * 0.15 + 0.85;
+    ctx.globalAlpha = hintState.alpha * 0.7 * shimmer;
+
+    ctx.shadowColor = "rgba(255,255,255,0.4)";
+    ctx.shadowBlur = 12 * hintState.alpha;
+
+    let text = "";
+    let color = "rgba(255,255,255,0.9)";
+
+    if (hintState.phase === 1) {
+      text = "tap to feed";
+      color = "rgba(255,255,255,0.95)";
+    } else if (hintState.phase === 3) {
+      text = "it might rain later";
+      color = "rgba(200,220,255,0.95)";
+    } else {
+      ctx.restore();
+      return;
+    }
+
+    ctx.fillStyle = color;
+    ctx.fillText(text, W / 2, H / 2 + hintState.yOffset);
+
+    ctx.restore();
+  }
+
+  /* =============================
      FOOD + SAFE RIPPLES
   ============================= */
 
@@ -143,21 +381,47 @@ canvas{
   let flow = 0;
 
   canvas.addEventListener("pointerdown", e => {
-    initAudio();
+    // --- Mute icon click detection (do not start game / hints) ---
+    const iconX = W - muteIcon.padding - muteIcon.size;
+    const iconY = muteIcon.padding;
+    if (
+      e.clientX > iconX &&
+      e.clientX < iconX + muteIcon.size &&
+      e.clientY > iconY &&
+      e.clientY < iconY + muteIcon.size
+    ) {
+      settings.sound = !settings.sound;
+
+      if (audioCtx) {
+        if (!settings.sound) audioCtx.suspend();
+        else audioCtx.resume();
+      }
+      return;
+    }
+
+
+
+    // Dismiss first hint only if it's currently visible
+    if (hintState.phase === 1) {
+      firstTapOccurred = true;
+    }
+
     
+    initAudio();
+
     // Check if clicking on a flower first
     let clickedFlower = false;
     for (const f of flowers) {
       const dx = e.clientX - f.x;
       const dy = e.clientY - f.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      
+
       // Check if click is within flower radius (considering size and petals)
       if (distance < f.size * 1.5) {
         // Trigger spin
         f.spinning = true;
         f.currentRotSpeed = rand(8, 12); // Fast spin speed
-        
+
         // Add spook zone to scare nearby fish
         spookZones.push({
           x: f.x,
@@ -166,12 +430,12 @@ canvas{
           maxLife: 1.2, // How long the spook effect lasts
           radius: 180   // How far the spook effect reaches
         });
-        
+
         clickedFlower = true;
         break; // Only spin one flower per click
       }
     }
-    
+
     // If didn't click a flower, add food and ripple as normal
     if (!clickedFlower) {
       foods.push({
@@ -194,15 +458,25 @@ canvas{
   function updateFood(dt) {
     flow += dt * 0.2;
     for (const f of foods) {
+      // gentle horizontal drift
       f.x += Math.sin(flow + f.y * 0.02) * 8 * dt;
-      f.y += Math.cos(flow + f.x * 0.02) * 4 * dt;
+
+      // slow sinking
+      f.y += 10 * dt;
+
+      // subtle bobbing
+      f.y += Math.sin(flow * 2 + f.x * 0.01) * 2 * dt;
+
+      // remove if sunk too low
+      if (f.y > H + 20) {
+        foods.splice(foods.indexOf(f), 1);
+      }
     }
   }
 
   function updateRipples(dt) {
-    for (const r of ripples) {
-      r.life += dt;
-    }
+    for (const r of ripples) r.life += dt;
+
     for (let i = ripples.length - 1; i >= 0; i--) {
       if (ripples[i].life > ripples[i].maxLife) {
         ripples.splice(i, 1);
@@ -211,9 +485,8 @@ canvas{
   }
 
   function updateSpookZones(dt) {
-    for (const z of spookZones) {
-      z.life += dt;
-    }
+    for (const z of spookZones) z.life += dt;
+
     for (let i = spookZones.length - 1; i >= 0; i--) {
       if (spookZones[i].life > spookZones[i].maxLife) {
         spookZones.splice(i, 1);
@@ -231,9 +504,9 @@ canvas{
 
   function spawnRainDrop() {
     if (rainDrops.length >= MAX_RAIN_DROPS) return;
-    
+
     const targetY = rand(H * 0.2, H * 0.95); // Random height where drop will hit
-    
+
     rainDrops.push({
       x: rand(W * 0.1, W * 0.9),
       y: -20,
@@ -273,10 +546,10 @@ canvas{
           baseRadius: 5,
           isRain: true
         });
-        
+
         // Remove the drop
         rainDrops.splice(i, 1);
-        
+
         // Optional: play subtle sound
         if (Math.random() < 0.3) {
           playDroplet(drop.x);
@@ -290,7 +563,7 @@ canvas{
 
     ctx.save();
     ctx.lineCap = 'round';
-    
+
     for (const drop of rainDrops) {
       ctx.strokeStyle = `rgba(200, 220, 255, ${drop.opacity})`;
       ctx.lineWidth = 1.5;
@@ -299,7 +572,7 @@ canvas{
       ctx.lineTo(drop.x, drop.y + drop.length);
       ctx.stroke();
     }
-    
+
     ctx.restore();
   }
 
@@ -318,7 +591,7 @@ canvas{
       this.vy = Math.sin(a) * this.baseSpeed;
       this.tail = rand(0, Math.PI * 2);
       this.speedMultiplier = 1.0; // For fleeing speed boost
-      
+
       // Classic koi color patterns
       const patterns = [
         { base: '#ffffff', accent: '#ff6b35', spots: true },  // Kohaku (white + red)
@@ -328,12 +601,12 @@ canvas{
         { base: '#ff6b6b', accent: '#8b0000', spots: false }, // Red
         { base: '#ffffff', accent: '#000000', spots: true },  // Shiro Utsuri (white + black)
       ];
-      
+
       const pattern = patterns[Math.floor(Math.random() * patterns.length)];
       this.baseColor = pattern.base;
       this.accentColor = pattern.accent;
       this.hasSpots = pattern.spots;
-      
+
       // Generate random spots if applicable
       this.spots = [];
       if (this.hasSpots) {
@@ -372,7 +645,6 @@ canvas{
         if (d2v < separation2 && d2v > 0.0001) {
           const dx = this.x - other.x;
           const dy = this.y - other.y;
-          // Weighted stronger when closer
           const inv = 1 / d2v;
           sepX += dx * inv;
           sepY += dy * inv;
@@ -391,7 +663,7 @@ canvas{
       let steerY = 0;
 
       if (count > 0) {
-        // Cohesion: steer toward average position
+        // Cohesion
         cohX = cohX / count - this.x;
         cohY = cohY / count - this.y;
         let m = Math.hypot(cohX, cohY) || 1;
@@ -399,7 +671,7 @@ canvas{
         cohY = (cohY / m) * this.baseSpeed - this.vy;
         [cohX, cohY] = limit(cohX, cohY, 120);
 
-        // Alignment: steer toward average velocity
+        // Alignment
         aliX /= count;
         aliY /= count;
         m = Math.hypot(aliX, aliY) || 1;
@@ -407,18 +679,17 @@ canvas{
         aliY = (aliY / m) * this.baseSpeed - this.vy;
         [aliX, aliY] = limit(aliX, aliY, 140);
 
-        // Separation: steer away from close neighbors
+        // Separation
         m = Math.hypot(sepX, sepY) || 1;
         sepX = (sepX / m) * this.baseSpeed - this.vx;
         sepY = (sepY / m) * this.baseSpeed - this.vy;
         [sepX, sepY] = limit(sepX, sepY, 180);
 
-        // Weights tuned to keep the same calm "Zen" feel
         steerX += cohX * 0.55 + aliX * 0.75 + sepX * 1.15;
         steerY += cohY * 0.55 + aliY * 0.75 + sepY * 1.15;
       }
 
-      // --- Food attraction (kept from original, just layered on top) ---
+      // --- Food attraction ---
       let nearest = null;
       let nearestDist = Infinity;
 
@@ -446,31 +717,29 @@ canvas{
         }
       }
 
-      // --- Spook avoidance (flee from clicked flowers) ---
+      // --- Spook avoidance ---
       let isSpooked = false;
       for (const zone of spookZones) {
         const dx = this.x - zone.x;
         const dy = this.y - zone.y;
         const d = Math.hypot(dx, dy) || 1;
-        
+
         if (d < zone.radius) {
           isSpooked = true;
-          // Stronger flee force when closer, weaker as life increases
           const fadeOut = 1 - (zone.life / zone.maxLife);
           const distanceFactor = 1 - (d / zone.radius);
           const fleeStrength = 400 * fadeOut * distanceFactor;
-          
+
           steerX += (dx / d) * fleeStrength;
           steerY += (dy / d) * fleeStrength;
         }
       }
-      
-      // Smooth speed multiplier with easing
+
       const targetMultiplier = isSpooked ? 1.3 : 1.0;
-      const easeSpeed = isSpooked ? 0.25 : 0.03; // Fast to speed up, very slow to calm down
+      const easeSpeed = isSpooked ? 0.25 : 0.03;
       this.speedMultiplier += (targetMultiplier - this.speedMultiplier) * easeSpeed;
 
-      // Gentle wander so schools don't become too rigid
+      // Gentle wander
       steerX += Math.cos(this.tail * 0.6) * 18;
       steerY += Math.sin(this.tail * 0.6) * 18;
 
@@ -491,7 +760,6 @@ canvas{
       if (this.y < 0) this.y = H;
       if (this.y > H) this.y = 0;
 
-      // Faster tail movement when fleeing
       this.tail += dt * 8 * this.speedMultiplier;
     }
 
@@ -501,7 +769,7 @@ canvas{
       ctx.translate(this.x, this.y);
       ctx.rotate(ang);
 
-      // Shadow underneath fish for depth
+      // Shadow
       ctx.save();
       ctx.globalAlpha = 0.2;
       ctx.fillStyle = '#000000';
@@ -510,26 +778,25 @@ canvas{
       ctx.fill();
       ctx.restore();
 
-      // Main body with gradient for 3D effect
-      const bodyGradient = ctx.createRadialGradient(
-        2, -1, 0,
-        0, 0, 12 * this.sizeScale
-      );
+      // Body gradient
+      const bodyGradient = ctx.createRadialGradient(2, -1, 0, 0, 0, 12 * this.sizeScale);
       bodyGradient.addColorStop(0, this.baseColor);
       bodyGradient.addColorStop(0.7, this.baseColor);
+
+      // Convert hex accent to rgba-ish (kept from original file)
       bodyGradient.addColorStop(1, this.accentColor.replace(')', ', 0.3)').replace('#', 'rgba(').replace(/^rgba\(([^,]+)/, (m, hex) => {
         const r = parseInt(hex.slice(0, 2), 16);
         const g = parseInt(hex.slice(2, 4), 16);
         const b = parseInt(hex.slice(4, 6), 16);
         return `rgba(${r}, ${g}, ${b}`;
       }));
-      
+
       ctx.fillStyle = bodyGradient;
       ctx.beginPath();
       ctx.ellipse(0, 0, 12 * this.sizeScale, 6 * this.sizeScale, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Add spots/patterns
+      // Spots
       if (this.hasSpots) {
         ctx.fillStyle = this.accentColor;
         for (const spot of this.spots) {
@@ -541,7 +808,7 @@ canvas{
         ctx.globalAlpha = 1;
       }
 
-      // Subtle scales texture
+      // Scales texture
       ctx.save();
       ctx.globalAlpha = 0.15;
       ctx.strokeStyle = this.accentColor;
@@ -555,69 +822,43 @@ canvas{
       }
       ctx.restore();
 
-// --- Koi Style Flowing Pectoral Fins (forward + gentle waggle) ---
-ctx.globalAlpha = 0.8;
+      // Pectoral fins (kept from original)
+      ctx.globalAlpha = 0.8;
+      const finWaggle = Math.sin(this.tail * 0.8) * 3 * this.sizeScale;
+      const finOffsetX = 6 * this.sizeScale;
 
-// Slow, elegant waggle (very subtle)
-const finWaggle = Math.sin(this.tail * 0.8) * 3 * this.sizeScale;
+      const finGradient = ctx.createRadialGradient(finOffsetX, 0, 0, finOffsetX, 0, 16 * this.sizeScale);
+      finGradient.addColorStop(0, this.baseColor);
+      finGradient.addColorStop(1, this.accentColor.replace(')', ', 0.4)').replace('#', 'rgba(').replace(/^rgba\(([^,]+)/, (m, hex) => {
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}`;
+      }));
+      ctx.fillStyle = finGradient;
 
-// Move fins forward toward the head
-const finOffsetX = 6 * this.sizeScale;
+      // Top fin
+      ctx.beginPath();
+      ctx.moveTo(finOffsetX, -3 * this.sizeScale);
+      ctx.quadraticCurveTo(-16 * this.sizeScale, -14 * this.sizeScale + finWaggle, -4 * this.sizeScale, -2 * this.sizeScale);
+      ctx.quadraticCurveTo(2 * this.sizeScale, -6 * this.sizeScale, finOffsetX, -3 * this.sizeScale);
+      ctx.fill();
 
-// Fin gradient
-const finGradient = ctx.createRadialGradient(finOffsetX, 0, 0, finOffsetX, 0, 16 * this.sizeScale);
-finGradient.addColorStop(0, this.baseColor);
-finGradient.addColorStop(1, this.accentColor.replace(')', ', 0.4)').replace('#', 'rgba(').replace(/^rgba\(([^,]+)/, (m, hex) => {
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}`;
-}));
+      // Bottom fin
+      ctx.beginPath();
+      ctx.moveTo(finOffsetX, 3 * this.sizeScale);
+      ctx.quadraticCurveTo(-16 * this.sizeScale, 14 * this.sizeScale - finWaggle, -4 * this.sizeScale, 2 * this.sizeScale);
+      ctx.quadraticCurveTo(2 * this.sizeScale, 6 * this.sizeScale, finOffsetX, 3 * this.sizeScale);
+      ctx.fill();
 
-ctx.fillStyle = finGradient;
+      ctx.globalAlpha = 1;
 
-// Top flowing fin
-ctx.beginPath();
-ctx.moveTo(finOffsetX, -3 * this.sizeScale);
-ctx.quadraticCurveTo(
-  -16 * this.sizeScale,
-  -14 * this.sizeScale + finWaggle,
-  -4 * this.sizeScale,
-  -2 * this.sizeScale
-);
-ctx.quadraticCurveTo(
-  2 * this.sizeScale,
-  -6 * this.sizeScale,
-  finOffsetX,
-  -3 * this.sizeScale
-);
-ctx.fill();
-
-// Bottom flowing fin
-ctx.beginPath();
-ctx.moveTo(finOffsetX, 3 * this.sizeScale);
-ctx.quadraticCurveTo(
-  -16 * this.sizeScale,
-  14 * this.sizeScale - finWaggle,
-  -4 * this.sizeScale,
-  2 * this.sizeScale
-);
-ctx.quadraticCurveTo(
-  2 * this.sizeScale,
-  6 * this.sizeScale,
-  finOffsetX,
-  3 * this.sizeScale
-);
-ctx.fill();
-
-ctx.globalAlpha = 1;
-
-      // Tail with gradient
+      // Tail
       const tailSwish = Math.sin(this.tail) * 6 * this.sizeScale;
       const tailGradient = ctx.createLinearGradient(-12 * this.sizeScale, 0, -22 * this.sizeScale, 0);
       tailGradient.addColorStop(0, this.baseColor);
       tailGradient.addColorStop(1, this.accentColor);
-      
+
       ctx.fillStyle = tailGradient;
       ctx.globalAlpha = 0.9;
       ctx.beginPath();
@@ -633,8 +874,7 @@ ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.arc(8 * this.sizeScale, -1.5 * this.sizeScale, 1.2 * this.sizeScale, 0, Math.PI * 2);
       ctx.fill();
-      
-      // Eye highlight
+
       ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
       ctx.beginPath();
       ctx.arc(8.3 * this.sizeScale, -1.8 * this.sizeScale, 0.5 * this.sizeScale, 0, Math.PI * 2);
@@ -667,26 +907,24 @@ ctx.globalAlpha = 1;
       currentRotSpeed: baseRotSpeed,
       spinning: false,
       color: Math.random() < 0.5
-        ? "rgba(255,255,255,0.95)"     // white
-        : "rgba(255,182,193,0.9)"      // pink
+        ? "rgba(255,255,255,0.95)"
+        : "rgba(255,182,193,0.9)"
     });
-
   }
 
   function updateFlowers(dt) {
     for (const f of flowers) {
       f.x += f.driftX * dt;
       f.y += f.driftY * dt;
-      
-      // Handle spinning - gradually slow down to normal speed
+
       if (f.spinning) {
-        f.currentRotSpeed = f.currentRotSpeed * 0.98; // Slow down gradually
+        f.currentRotSpeed = f.currentRotSpeed * 0.98;
         if (f.currentRotSpeed <= f.baseRotSpeed * 1.1) {
           f.spinning = false;
           f.currentRotSpeed = f.baseRotSpeed;
         }
       }
-      
+
       f.rot += dt * f.currentRotSpeed;
 
       if (f.y > H + 50) {
@@ -701,32 +939,27 @@ ctx.globalAlpha = 1;
 
   function drawFlowers() {
     for (const f of flowers) {
-      // --- Draw Shadow First ---
+      // Shadow
       ctx.save();
-      // Shift shadow slightly down and to the right
-      ctx.translate(f.x + 15, f.y + 15); 
+      ctx.translate(f.x + 15, f.y + 15);
       ctx.rotate(f.rot);
-      
-      // Use a very soft, dark blue/black for water shadows
-      ctx.fillStyle = "rgba(0, 0, 0, 0.2)"; 
-      
+      ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+
       for (let i = 0; i < f.petals; i++) {
         ctx.save();
         ctx.rotate((Math.PI * 2 / f.petals) * i);
         ctx.beginPath();
-        // Match the petal shape of the main flower
         ctx.ellipse(f.size * 0.6, 0, f.size, f.size * 0.5, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
       ctx.restore();
 
-      // --- Draw Main Flower ---
+      // Main flower
       ctx.save();
       ctx.translate(f.x, f.y);
       ctx.rotate(f.rot);
 
-      // Keeping your original glow/blur for the flower itself
       ctx.shadowColor = "rgba(0,0,0,0.15)";
       ctx.shadowBlur = 10;
 
@@ -740,7 +973,6 @@ ctx.globalAlpha = 1;
         ctx.restore();
       }
 
-      // Center of the flower
       ctx.fillStyle = "rgba(255,220,120,0.95)";
       ctx.beginPath();
       ctx.arc(0, 0, f.size * 0.5, 0, Math.PI * 2);
@@ -749,6 +981,7 @@ ctx.globalAlpha = 1;
       ctx.restore();
     }
   }
+
   /* =============================
      LOOP
   ============================= */
@@ -761,20 +994,26 @@ ctx.globalAlpha = 1;
 
     drawWater();
     updateRainCycle(dt);
+
     updateFood(dt);
     updateRipples(dt);
     updateSpookZones(dt);
     updateFlowers(dt);
     updateRain(dt);
 
+    // Audio follow rain state
+    updateRainAudio(dt);
+
+    // Hint timing starts only after first interaction
+    updateHints(dt);
+
     for (const f of fishes) f.update(dt, fishes);
 
     /* Ripple drawing - differentiate rain vs click */
     for (const r of ripples) {
       const t = r.life / r.maxLife;
-      
+
       if (r.isRain) {
-        // Rain ripples: smaller, faster, more delicate
         const ease = 1 - Math.pow(1 - t, 3);
         const radius = r.baseRadius + ease * 60;
         const alpha = (1 - t) * 0.6;
@@ -782,13 +1021,11 @@ ctx.globalAlpha = 1;
         ctx.save();
         ctx.lineWidth = 1.5 * (1 - t);
         ctx.strokeStyle = `rgba(200, 220, 255, ${alpha})`;
-        
-        // Single elegant ring
+
         ctx.beginPath();
         ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
         ctx.stroke();
-        
-        // Inner subtle ring
+
         if (radius > 15) {
           ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.5})`;
           ctx.lineWidth = 1 * (1 - t);
@@ -796,10 +1033,9 @@ ctx.globalAlpha = 1;
           ctx.arc(r.x, r.y, radius * 0.6, 0, Math.PI * 2);
           ctx.stroke();
         }
-        
+
         ctx.restore();
       } else {
-        // Click/food ripples: original larger ripples
         const ease = 1 - Math.pow(1 - t, 2);
         const radius = r.baseRadius + ease * 220;
         const alpha = 1 - t;
@@ -824,20 +1060,47 @@ ctx.globalAlpha = 1;
     }
 
     for (const f of foods) {
-      ctx.fillStyle = "yellow";
+      ctx.save();
+
+      // slight squash for natural pellet feel
+      ctx.translate(f.x, f.y);
+      ctx.rotate(Math.sin(flow + f.x * 0.01) * 0.2);
+
+      const g = ctx.createRadialGradient(
+        -f.size * 0.3, -f.size * 0.3, 1,
+        0, 0, f.size
+      );
+      g.addColorStop(0, "#fff6c2");
+      g.addColorStop(0.5, "#ffc94d");
+      g.addColorStop(1, "#c98900");
+
+      ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.arc(f.x, f.y, f.size, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, f.size * 1.2, f.size, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      // glossy highlight
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath();
+      ctx.ellipse(-f.size * 0.3, -f.size * 0.3, f.size * 0.4, f.size * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
     }
 
     for (const f of fishes) f.draw();
     drawFlowers();
     drawRain();
 
+    // UI overlays (on top of game)
+    drawHints();
+    drawMuteIcon();
+
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
 
-})();</script>
+})();
+</script>
 </body>
 </html>
