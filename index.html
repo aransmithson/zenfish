@@ -206,24 +206,40 @@ canvas{
   }
 
   /* =============================
-     PAGE VISIBILITY - PAUSE AUDIO WHEN MINIMIZED
+     PAGE / APP LIFECYCLE - PAUSE AUDIO WHEN BACKGROUNDED (ANDROID SAFE)
   ============================= */
 
-  document.addEventListener('visibilitychange', () => {
+  function suspendAudio() {
     if (!audioCtx) return;
-
-    if (document.hidden) {
-      // Page is hidden (minimized, tab switched, etc) - suspend audio
-      if (audioCtx.state === 'running') {
-        audioCtx.suspend();
-      }
-    } else {
-      // Page is visible again - resume audio if sound is enabled
-      if (audioCtx.state === 'suspended' && settings.sound) {
-        audioCtx.resume();
-      }
+    if (audioCtx.state === "running") {
+      audioCtx.suspend();
     }
+  }
+
+  function resumeAudio() {
+    if (!audioCtx) return;
+    if (settings.sound && audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+  }
+
+  // Standard visibility API (works for most tab switches)
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) suspendAudio();
+    else resumeAudio();
   });
+
+  // Mobile / Android app switching often triggers these instead (or earlier)
+  window.addEventListener("blur", suspendAudio);
+  window.addEventListener("pagehide", suspendAudio);
+
+  // Coming back to the page/app
+  window.addEventListener("focus", resumeAudio);
+  window.addEventListener("pageshow", resumeAudio);
+
+  // Chrome Page Lifecycle API (extra safety where supported)
+  document.addEventListener("freeze", suspendAudio);
+  document.addEventListener("resume", resumeAudio);
 
   /* =============================
      UI: MUTE ICON + HINTS
@@ -413,20 +429,17 @@ canvas{
       settings.sound = !settings.sound;
 
       if (audioCtx) {
-        if (!settings.sound) audioCtx.suspend();
-        else audioCtx.resume();
+        if (!settings.sound) suspendAudio();
+        else resumeAudio();
       }
       return;
     }
-
-
 
     // Dismiss first hint only if it's currently visible
     if (hintState.phase === 1) {
       firstTapOccurred = true;
     }
 
-    
     initAudio();
 
     // Check if clicking on a flower first
@@ -1122,6 +1135,8 @@ canvas{
 
 })();
 </script>
-  <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "3c5ac2ad7f0a4bf2b52c11e92f3ca1cf"}'></script><!-- End Cloudflare Web Analytics -->
+<!-- Cloudflare Web Analytics -->
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "3c5ac2ad7f0a4bf2b52c11e92f3ca1cf"}'></script>
+<!-- End Cloudflare Web Analytics -->
 </body>
 </html>
