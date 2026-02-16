@@ -206,6 +206,26 @@ canvas{
   }
 
   /* =============================
+     PAGE VISIBILITY - PAUSE AUDIO WHEN MINIMIZED
+  ============================= */
+
+  document.addEventListener('visibilitychange', () => {
+    if (!audioCtx) return;
+
+    if (document.hidden) {
+      // Page is hidden (minimized, tab switched, etc) - suspend audio
+      if (audioCtx.state === 'running') {
+        audioCtx.suspend();
+      }
+    } else {
+      // Page is visible again - resume audio if sound is enabled
+      if (audioCtx.state === 'suspended' && settings.sound) {
+        audioCtx.resume();
+      }
+    }
+  });
+
+  /* =============================
      UI: MUTE ICON + HINTS
   ============================= */
 
