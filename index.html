@@ -291,15 +291,24 @@ canvas{
   let hintTimer = 0;
   let firstTapOccurred = false;
 
+  // Messages cycle: welcome → feed → spook → relax (all lowercase)
+  const hintMessages = [
+    { text: "welcome to zenfish", color: "rgba(255,255,255,0.95)" },
+    { text: "tap to feed the fish", color: "rgba(255,255,255,0.95)" },
+    { text: "tapping flowers spooks the fish", color: "rgba(200,220,255,0.95)" },
+    { text: "relax", color: "rgba(180,220,255,0.95)" }
+  ];
+
   const hintState = {
-    phase: 0,   // 0 waiting, 1 first, 2 gap, 3 second, 4 done
+    step: -1,     // -1 = initial wait, 0..3 = message index, 4+ = done
+    mode: "wait", // "wait", "show", "gap"
     alpha: 0,
     yOffset: 0,
     shimmer: 0
   };
 
   function updateHints(dt) {
-    if (!gameStarted) return;
+    if (!gameStarted || hintState.step >= hintMessages.length) return;
 
     hintTimer += dt;
     hintState.shimmer += dt * 2;
@@ -308,18 +317,23 @@ canvas{
     const HOLD = 2.5;
     const FADE_OUT = 2.0;
     const START_DELAY = 2.0;
+    const GAP = 1.2;
 
-    // Wait before first hint
-    if (hintState.phase === 0 && hintTimer > START_DELAY) {
-      hintState.phase = 1;
-      hintTimer = 0;
+    // Initial wait before anything shows
+    if (hintState.step === -1) {
+      if (hintTimer > START_DELAY) {
+        hintState.step = 0;
+        hintState.mode = "show";
+        hintTimer = 0;
+      }
+      return;
     }
 
-    // FIRST MESSAGE
-    if (hintState.phase === 1) {
-      // Disappear immediately on first tap
-      if (firstTapOccurred) {
-        hintState.phase = 2;
+    // Showing a message
+    if (hintState.mode === "show") {
+      // Skip "tap to feed" hint early if user already tapped
+      if (hintState.step === 1 && firstTapOccurred) {
+        hintState.mode = "gap";
         hintTimer = 0;
         hintState.alpha = 0;
         hintState.yOffset = 0;
@@ -333,39 +347,19 @@ canvas{
       } else if (hintTimer < FADE_IN + HOLD + FADE_OUT) {
         hintState.alpha = 1 - (hintTimer - FADE_IN - HOLD) / FADE_OUT;
       } else {
-        hintState.phase = 2;
+        hintState.mode = "gap";
         hintTimer = 0;
         hintState.alpha = 0;
       }
     }
 
-    // GAP BEFORE SECOND
-    if (hintState.phase === 2) {
-      // Only show second if rain hasn't started
-      if (settings.rain) {
-        hintState.phase = 4;
-        hintState.alpha = 0;
-        hintState.yOffset = 0;
-        return;
-      }
-
-      if (hintTimer > 1.5) {
-        hintState.phase = 3;
+    // Gap between messages
+    if (hintState.mode === "gap") {
+      if (hintTimer > GAP) {
+        hintState.step++;
+        if (hintState.step >= hintMessages.length) return;
+        hintState.mode = "show";
         hintTimer = 0;
-      }
-    }
-
-    // SECOND MESSAGE
-    if (hintState.phase === 3) {
-      if (hintTimer < FADE_IN) {
-        hintState.alpha = hintTimer / FADE_IN;
-      } else if (hintTimer < FADE_IN + HOLD) {
-        hintState.alpha = 1;
-      } else if (hintTimer < FADE_IN + HOLD + FADE_OUT) {
-        hintState.alpha = 1 - (hintTimer - FADE_IN - HOLD) / FADE_OUT;
-      } else {
-        hintState.phase = 4;
-        hintState.alpha = 0;
       }
     }
 
@@ -374,7 +368,10 @@ canvas{
   }
 
   function drawHints() {
-    if (hintState.phase === 0 || hintState.phase === 4) return;
+    if (hintState.step < 0 || hintState.step >= hintMessages.length) return;
+    if (hintState.mode !== "show") return;
+
+    const msg = hintMessages[hintState.step];
 
     ctx.save();
     ctx.textAlign = "center";
@@ -387,22 +384,8 @@ canvas{
     ctx.shadowColor = "rgba(255,255,255,0.4)";
     ctx.shadowBlur = 12 * hintState.alpha;
 
-    let text = "";
-    let color = "rgba(255,255,255,0.9)";
-
-    if (hintState.phase === 1) {
-      text = "tap to feed";
-      color = "rgba(255,255,255,0.95)";
-    } else if (hintState.phase === 3) {
-      text = "it might rain later";
-      color = "rgba(200,220,255,0.95)";
-    } else {
-      ctx.restore();
-      return;
-    }
-
-    ctx.fillStyle = color;
-    ctx.fillText(text, W / 2, H / 2 + hintState.yOffset);
+    ctx.fillStyle = msg.color;
+    ctx.fillText(msg.text, W / 2, H / 2 + hintState.yOffset);
 
     ctx.restore();
   }
@@ -435,8 +418,8 @@ canvas{
       return;
     }
 
-    // Dismiss first hint only if it's currently visible
-    if (hintState.phase === 1) {
+    // Dismiss feed hint early if it's currently visible
+    if (hintState.step === 1) {
       firstTapOccurred = true;
     }
 
@@ -469,13 +452,23 @@ canvas{
       }
     }
 
-    // If didn't click a flower, add food and ripple as normal
+    // If didn't click a flower, spawn food particles and ripple
     if (!clickedFlower) {
-      foods.push({
-        x: e.clientX,
-        y: e.clientY,
-        size: 8
-      });
+      const count = Math.floor(rand(8, 14));
+      for (let i = 0; i < count; i++) {
+        const angle = rand(0, Math.PI * 2);
+        const spread = rand(2, 18);
+        foods.push({
+          x: e.clientX + Math.cos(angle) * spread,
+          y: e.clientY + Math.sin(angle) * spread,
+          size: rand(2, 4.5),
+          vx: Math.cos(angle) * rand(4, 16),
+          vy: rand(-8, 4),
+          sinkSpeed: rand(12, 28),
+          wobblePhase: rand(0, Math.PI * 2),
+          opacity: 1
+        });
+      }
       ripples.push({
         x: e.clientX,
         y: e.clientY,
@@ -490,19 +483,33 @@ canvas{
 
   function updateFood(dt) {
     flow += dt * 0.2;
-    for (const f of foods) {
-      // gentle horizontal drift
-      f.x += Math.sin(flow + f.y * 0.02) * 8 * dt;
+    for (let i = foods.length - 1; i >= 0; i--) {
+      const f = foods[i];
 
-      // slow sinking
-      f.y += 10 * dt;
+      // Lateral velocity decays (particles spread then settle)
+      f.vx *= (1 - 1.5 * dt);
 
-      // subtle bobbing
-      f.y += Math.sin(flow * 2 + f.x * 0.01) * 2 * dt;
+      // Gentle horizontal drift + wobble
+      f.x += f.vx * dt + Math.sin(flow + f.wobblePhase + f.y * 0.03) * 6 * dt;
 
-      // remove if sunk too low
-      if (f.y > H + 20) {
-        foods.splice(foods.indexOf(f), 1);
+      // Slow sinking — smaller particles sink slower
+      f.y += f.sinkSpeed * dt;
+
+      // Subtle bobbing
+      f.y += Math.sin(flow * 2 + f.wobblePhase) * 1.5 * dt;
+
+      // Vertical velocity settles toward sink speed
+      f.vy += (f.sinkSpeed - f.vy) * 2 * dt;
+      f.y += f.vy * dt;
+
+      // Fade out near bottom
+      if (f.y > H - 60) {
+        f.opacity -= 1.5 * dt;
+      }
+
+      // Remove if faded or sunk
+      if (f.opacity <= 0 || f.y > H + 20) {
+        foods.splice(i, 1);
       }
     }
   }
@@ -742,10 +749,12 @@ canvas{
         steerX += (dx / d) * pull;
         steerY += (dy / d) * pull;
 
-        if (d < 15) {
-          nearest.size -= 40 * dt;
-          if (nearest.size <= 0) {
-            foods.splice(foods.indexOf(nearest), 1);
+        if (d < 18) {
+          nearest.size -= 12 * dt;
+          nearest.opacity -= 3 * dt;
+          if (nearest.size <= 0 || nearest.opacity <= 0) {
+            const idx = foods.indexOf(nearest);
+            if (idx !== -1) foods.splice(idx, 1);
           }
         }
       }
@@ -1094,28 +1103,27 @@ canvas{
 
     for (const f of foods) {
       ctx.save();
-
-      // slight squash for natural pellet feel
+      ctx.globalAlpha = f.opacity;
       ctx.translate(f.x, f.y);
-      ctx.rotate(Math.sin(flow + f.x * 0.01) * 0.2);
 
+      // Warm gradient for each particle
       const g = ctx.createRadialGradient(
-        -f.size * 0.3, -f.size * 0.3, 1,
+        -f.size * 0.2, -f.size * 0.2, 0,
         0, 0, f.size
       );
       g.addColorStop(0, "#fff6c2");
       g.addColorStop(0.5, "#ffc94d");
-      g.addColorStop(1, "#c98900");
+      g.addColorStop(1, "rgba(201,137,0,0.6)");
 
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.ellipse(0, 0, f.size * 1.2, f.size, 0, 0, Math.PI * 2);
+      ctx.arc(0, 0, f.size, 0, Math.PI * 2);
       ctx.fill();
 
-      // glossy highlight
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      // Tiny highlight
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.beginPath();
-      ctx.ellipse(-f.size * 0.3, -f.size * 0.3, f.size * 0.4, f.size * 0.25, 0, 0, Math.PI * 2);
+      ctx.arc(-f.size * 0.25, -f.size * 0.25, f.size * 0.35, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
